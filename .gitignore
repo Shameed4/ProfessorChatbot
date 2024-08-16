@@ -1,2 +1,4 @@
 /papers
 /testing
+.env.local
+*.log
