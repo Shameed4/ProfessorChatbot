@@ -1,0 +1,5 @@
+/papers
+/testing
+.env.local
+*.log
+/__pycache__
