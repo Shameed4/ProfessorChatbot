@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 
 import os
@@ -50,12 +50,18 @@ def upload_professor_to_pinecone():
         path_to_uploaded_db(papers_dir / name_to_pathname(professor))
         return jsonify({'message': 'Success!'})
 
-@app.route('/chat_with_professor', methods=['GET'])
+@app.route('/chat_with_professor', methods=['POST'])
 def chat_with_professor():
-    professor = request.args.get('professor')
-    history = request.args.get('history')
-    history = [{'role': 'user', 'content': 'Tell me about something that this professor published'}] # TODO: remove this line
-    return jsonify(rag_chat(professor, history)), 200
+    data = request.get_json()
+    professor = data.get('professor')
+    history = data.get('history')
+    
+    @stream_with_context
+    def generate():
+        for chunk in rag_chat(professor, history):
+            yield chunk  # Yield each chunk to the client as it's generated
+    
+    return Response(generate(), content_type='text/event-stream')
     
 
 if __name__ == '__main__':

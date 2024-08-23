@@ -133,6 +133,15 @@ def prompt_index_deletion_and_quit():
         print('Index saved')
     exit(0)
 
+# def rag_query(professor_name, user_message, k=5) -> str:
+#     primer = f"Your job is to turn the user's question into a query statement for a vector database to answer the user's question about professor {professor_name}."
+#     messages = [{"role": "system", "content": primer}, {"role": "user", "content": user_message}]
+#     return client.chat.completions.create(
+#         model=language_model,
+#         messages=messages
+#     ).
+
+
 def rag_chat(professor_name, messages : list, k = 5) -> str:
     """
     Parameters:
@@ -142,30 +151,27 @@ def rag_chat(professor_name, messages : list, k = 5) -> str:
     Returns a new message using RAG.
     """
     index = pc.Index(name_to_index_name(professor_name))
-
     primer = f"You are a Q&A bot that answers questions specifically about {professor_name}'s research. If the user doesn't specify a professor, you know they are referring to {professor_name}. Avoid naming other professors unless it is relevant to the user's questions. You will be given {k} excerpts from {professor_name}'s research papers, but the user is not providing them and cannot see them. If you don't know anything based on the results, truthfully say \"I don't know\"."
-    print(primer)
     chat_history = [{"role": "system", "content": primer}] + messages
     user_response = chat_history[-1]["content"]
     query = client.embeddings.create(input=[user_response], model=embeddings_model).data[0].embedding
     top_results = index.query(vector=query, top_k=k, include_metadata=True)['matches']
-    
+
     metadata = [result['metadata'] for result in top_results]
-    info = ['\n'.join([f"{key}:\n{data[key]}" for key in data]) for data in metadata]
+    info = ['\n\n'.join([f"{key}:{data[key]}" for key in data]) for data in metadata]
     augmented = '\n\n-----\n\n'.join(info)
     augmented_prompt = f"{augmented}\n\n\n-----\n\n\n{user_response}"
-    print()
-    print(augmented_prompt)
-
     chat_history[-1]["content"] = augmented_prompt
-    print()
-    print(chat_history)
-    print()
     completion = client.chat.completions.create(
         model=language_model,
-        messages=messages
+        messages=chat_history,
+        stream=True
     )
-    return completion.choices[0].message.content
+    
+    for chunk in completion:
+        content = chunk.choices[0].delta.content
+        if content:
+            yield content
 
 def chat():
     print("""Welcome to the chat bot! You can ask a question, or do one of the following
