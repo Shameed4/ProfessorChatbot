@@ -13,6 +13,7 @@ export default function Home() {
     const professors = await response.json()
     setAvailableProfessors(professors['professors'])
   }
+
   useEffect(() => {
     getAvailableProfessors()
   }, [])
@@ -29,11 +30,13 @@ export default function Home() {
   }, [selectedProfessor])
 
   const [message, setMessage] = useState('');
+  const [typingProfessorName, setTypingProfessorName] = useState('');
+  const [typingProfessorCollege, setTypingProfessorCollege] = useState('Stony Brook University');
 
   const sendMessage = async () => {
     if (!message)
       return;
-    setMessage('');
+    setMessage('Thinking...');
     const newMessages = [...messages, { role: 'user', content: message }, { role: 'assistant', content: '' }]
     setMessages(newMessages);
     try {
@@ -41,7 +44,7 @@ export default function Home() {
         professor: selectedProfessor,
         history: newMessages.slice(0, -1), // List of objects
       };
-    
+
       const response = await fetch(`${host}/chat_with_professor`, {
         method: 'POST',
         headers: {
@@ -49,22 +52,22 @@ export default function Home() {
         },
         body: JSON.stringify(body),
       });
-    
+
       // Check if the response body exists for streaming
       if (!response.body) {
         throw new Error('No response body');
       }
-    
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let done = false;
       let message = '';  // Accumulate the message chunks here
-    
+
       while (!done) {
         const { value, done: streamDone } = await reader.read();
         done = streamDone;
         message += decoder.decode(value, { stream: !done });  // Append chunk to message
-    
+
         setMessages((messages) => {
           let updatedMessages = [...messages];
           updatedMessages[updatedMessages.length - 1].content = message;
@@ -75,21 +78,46 @@ export default function Home() {
     catch (error) {
       console.error('Error fetching data:', error);
     }
-    
-
   }
 
+  const uploadProfessor = async () => {
+    if (!typingProfessorName || !typingProfessorCollege)
+      return;
+    try {
+      const body = {
+        professor: typingProfessorName,
+        college: typingProfessorCollege
+      };
+
+      console.log(body)
+
+      const response = await fetch(`${host}/scrape_and_upload_professor`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+
+      setTypingProfessorName('');
+      getAvailableProfessors()
+    }
+    catch (err) {
+      console.error(err);
+    }
+  }
 
   return (
     <Box width="100vw" height="100vh" display="flex" justifyContent="center" alignItems="center" flexDirection="column" overflow="hidden">
-      <Stack direction="row">
-        {availableProfessors.map(prof => (
-          <Button variant={prof === selectedProfessor ? 'contained' : 'outlined'} onClick={() => {setSelectedProfessor(selectedProfessor === prof ? null : prof)}}>{prof}</Button>
-        ))}
-      </Stack>
       <Box width="60vw" borderRadius={2} textAlign="center" p={2}>
         <Typography variant="h4">Professor Chatbot</Typography>
       </Box>
+
+      <Stack direction="row">
+        {availableProfessors.map(prof => (
+          <Button variant={prof === selectedProfessor ? 'contained' : 'outlined'} onClick={() => { setSelectedProfessor(selectedProfessor === prof ? null : prof) }}>{prof}</Button>
+        ))}
+      </Stack>
 
       {
         selectedProfessor ?
@@ -157,7 +185,37 @@ export default function Home() {
             </Stack>
           </Box>)
           :
-          <Typography>Please select a professor</Typography>
+          <Box>
+            <Typography variant="h6">Please select a professor. Professor not found?</Typography>
+            <Box border="1px solid #ccc" direction="row">
+              <Typography>Add a professor</Typography>
+              <Stack direction="row">
+                <TextField
+                  label="Name"
+                  value={typingProfessorName}
+                  onChange={(e) => setTypingProfessorName(e.target.value)}
+                  variant="outlined"
+                  sx={{
+                    bgcolor: "white",
+                    borderRadius: 1,
+                    boxShadow: "0px 2px 4px rgba(0, 0, 100, 0.1)",
+                  }}
+                />
+                <TextField
+                  label="College"
+                  value={typingProfessorCollege}
+                  onChange={(e) => setTypingProfessorCollege(e.target.value)}
+                  variant="outlined"
+                  sx={{
+                    bgcolor: "white",
+                    borderRadius: 1,
+                    boxShadow: "0px 2px 4px rgba(0, 0, 100, 0.1)",
+                  }}
+                />
+                <Button onClick={uploadProfessor}>Upload</Button>
+              </Stack>
+            </Box>
+          </Box>
       }
     </Box>
   )

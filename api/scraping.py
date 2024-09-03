@@ -24,11 +24,11 @@ successful_articles = dict()
 unsuccessful_articles = dict()
 sleep_time = 0.1
 
-directory_path = Path('./papers')
+papers_path = Path('./papers')
 
 # Create the directory if it doesn't exist
-if not os.path.exists(directory_path):
-    os.makedirs(directory_path)
+if not os.path.exists(papers_path):
+    os.makedirs(papers_path)
 
 
 def name2scholar_url(name, college):
@@ -99,7 +99,7 @@ def read_pdf(article_name, pdf_url):
     on_fly_mem_obj = io.BytesIO(response.content)
     pdf_file = PdfReader(on_fly_mem_obj)
     # Saving the extracted text to a plain text file
-    with open(f"{directory_path}/{pdf_name}", 'w', encoding='utf-8') as file:
+    with open(f"{papers_path}/{pdf_name}", 'w', encoding='utf-8') as file:
         for page in pdf_file.pages:
             text = page.extract_text()
             if text:  # Check if there's any text extracted from the page
@@ -187,22 +187,22 @@ def read_article(article_name, article_url):
 def read_all_articles(article_data):
     for article_name, article_url in article_data:
         read_article(article_name, article_url)
-    with open(f'{directory_path}/successful_articles.json', 'w') as file:
+    with open(f'{papers_path}/successful_articles.json', 'w') as file:
         json.dump(successful_articles, file)
-    with open(f'{directory_path}/unsuccessful_articles.json', 'w') as file:
+    with open(f'{papers_path}/unsuccessful_articles.json', 'w') as file:
         json.dump(unsuccessful_articles, file)
 
 def scrape_professor_by_name_college(professor_name, college="Stony Brook University"):
-    global directory_path
-    directory_path = directory_path / f"{professor_name.lower().replace(' ', '_')}"
+    global papers_path
+    papers_path = papers_path / f"{professor_name.lower().replace(' ', '_')}"
     # Create the directory if it doesn't exist
-    if not os.path.exists(directory_path):
-        os.makedirs(directory_path)
+    if not os.path.exists(papers_path):
+        os.makedirs(papers_path)
     scholar_url = name2scholar_url(professor_name, college)
     public_articles_url = scholar_url2public_articles_url(scholar_url)
     article_data = public_articles_url2article_info(public_articles_url)
     read_all_articles(article_data)
-    return directory_path
+    return papers_path
 
 if __name__ == "__main__":
     scrape_professor_by_name_college(input("which professor would you like data on? "), input("which college would you like your data on? "))

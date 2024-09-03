@@ -1,3 +1,5 @@
+from helpers import name_to_pathname, pathname_to_name
+
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 
@@ -5,50 +7,64 @@ import os
 from pathlib import Path
 
 from scraping import scrape_professor_by_name_college
-from rag import path_to_uploaded_db, rag_chat
+from rag import name_to_uploaded_db, rag_chat, professors
 
 app = Flask(__name__)
 CORS(app)
 
 papers_dir = Path('./papers')
 
-def pathname_to_name(pathname):
-    return pathname.replace('_', ' ').title()
-
-def name_to_pathname(name):
-    return name.replace(' ', '_').lower()
-
-@app.route('/echo', methods=['GET'])
-def echo():
-    message = request.args.get('message')
-    print(message)
-    return jsonify({'message': message})
-
 @app.route('/professors', methods=['GET'])
 def get_professors():
-    professor_folders = os.listdir(papers_dir)
-    professor_names = list(map(pathname_to_name, professor_folders))
-    return jsonify({'professors': professor_names})
+    return jsonify({'professors': professors})
 
 @app.route('/scrape_professor', methods=['POST'])
 def scrape_professor():
-    professor = request.args.get('professor')
-    college = request.args.get('college')
+    data = request.get_json()
+    professor = data.get('professor')
+    college = data.get('college')
     if college:
         scrape_professor_by_name_college(professor, college)
     else:
         scrape_professor_by_name_college(professor)
     professor_papers_dir = papers_dir / name_to_pathname(professor)
-    return jsonify({'articles': len(os.listdir(professor_papers_dir) - 2)})
+    return jsonify({'articles': len(os.listdir(professor_papers_dir)) - 2})
 
 @app.route('/upload_professor_to_db', methods=['POST'])
-def upload_professor_to_pinecone():
-    professor = request.args.get('professor')
+def upload_professor_to_db():
+    data = request.get_json()
+    professor = data.get('professor')
     if name_to_pathname(professor) not in os.listdir(papers_dir):
         return jsonify(f'{professor} not found in database'), 404
     else:
-        path_to_uploaded_db(papers_dir / name_to_pathname(professor))
+        name_to_uploaded_db(professor)
         return jsonify({'message': 'Success!'})
+
+@app.route('/scrape_and_upload_professor', methods=['POST'])
+def scrape_and_upload_professor():
+    # Call the existing scrape_professor route
+    professor = request.args.get('professor')
+    college = request.args.get('college')
+    print('info 2 --', professor, college)
+    scrape_response = scrape_professor()
+    scrape_data = scrape_response.get_json()
+
+    # If scraping was successful, proceed to upload
+    if 'articles' in scrape_data:
+        upload_response = upload_professor_to_db()
+        upload_data = upload_response.get_json()
+
+        if upload_response.status_code == 200:
+            # Combine the responses and return
+            return jsonify({
+                'message': upload_data['message'],
+                'articles': scrape_data['articles']
+            })
+        else:
+            return upload_response  # Return the error response from the upload route
+    else:
+        return scrape_response  # Return the error response from the scrape route
+
 
 @app.route('/chat_with_professor', methods=['POST'])
 def chat_with_professor():

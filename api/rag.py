@@ -8,7 +8,7 @@ from pathlib import Path
 
 load_dotenv('./.env.local')
 professor_name = 'Ritwik Banerjee'
-dir_path = Path('./papers') / professor_name.lower().replace(' ', '_')
+papers_path = Path('./papers')
 
 # openAI stuff
 from openai import OpenAI
@@ -19,16 +19,16 @@ tokenizer = tiktoken.encoding_for_model(embeddings_model)
 client = OpenAI()
 cost_per_token = 0.000020 / 1000
 
+from helpers import name_to_index_name, name_to_pathname
+
 # pinecone and langchain stuff
 from pinecone import Pinecone, ServerlessSpec
 from langchain.text_splitter import RecursiveCharacterTextSplitter
+
 pc = Pinecone()
 cloud = os.environ.get('PINECONE_CLOUD') or 'aws'
 region = os.environ.get('PINECONE_REGION') or 'us-east-1'
 spec = ServerlessSpec(cloud=cloud, region=region)
-
-def name_to_index_name(professor):
-    return professor.lower().replace(' ', '-')
 
 # returns how many tokens a text is
 def tiktoken_len(text):
@@ -44,6 +44,24 @@ text_splitter = RecursiveCharacterTextSplitter(
     length_function=tiktoken_len,
     separators=["\n\n", "\n", " ", ""]
 )
+
+index_name="professors"
+if index_name not in pc.list_indexes().names():
+    pc.create_index(
+        index_name,
+        dimension=1536, # TODO: replace with len(embed.data[0].embedding)
+        metric='cosine',
+        spec=spec
+    )
+index = pc.Index(index_name)
+
+
+uploaded_professors_path = papers_path / 'uploaded_professors.json' 
+if os.path.exists(uploaded_professors_path):
+    with open(uploaded_professors_path, 'r') as file:
+        professors = json.load(file)
+else:
+    professors = []
 
 # gets the chunks given that there are .txt files in that directory
 def get_chunks(dir_path : Path):
@@ -83,6 +101,17 @@ def chunks2embedding(texts, attempts=2, delay=2):
 
 
 def upload_to_pinecone(professor_name, chunks, batch_size=50, estimate_costs=False):
+    # check if professor already exists
+    query_result = index.query(
+        vector=[0]*1536, 
+        top_k=1,
+        filter={"professor": professor_name},
+        include_metadata=True
+    )
+    if query_result["matches"]:
+        print("Vector with professor: 'Xi Chen' already exists.")
+        return
+    
     total_tokens = 0 # TODO: Count tokens for estimating costs
     print(f"Embedding {len(chunks)}")
     for i in range(0, len(chunks), batch_size):
@@ -98,30 +127,23 @@ def upload_to_pinecone(professor_name, chunks, batch_size=50, estimate_costs=Fal
         meta_batch = [{
             'text': x['text'],
             'id': x['id'],
-            'url': x['url']
+            'url': x['url'],
+            'professor': professor_name
         } for x in meta_batch]
         to_upsert = list(zip(meta_ids, embeds, meta_batch))
     
-    index_name=name_to_index_name(professor_name)
-    if index_name not in pc.list_indexes().names():
-        pc.create_index(
-            index_name,
-            dimension=1536, # TODO: replace with len(embed.data[0].embedding)
-            metric='cosine',
-            spec=spec
-        )
-    
-    while not pc.describe_index(index_name).status['ready']:
-        time.sleep(1)
-    
-    index = pc.Index(index_name)
     index.upsert(vectors=to_upsert)
 
+    # save loaded professors locally   
+    professors.append(professor_name)
+    with open(uploaded_professors_path, 'w') as file:
+        json.dump(professors, file, indent=4)
 
-def path_to_uploaded_db(path : Path):
+
+def name_to_uploaded_db(name : str):
+    path = papers_path / name_to_pathname(name)
     chunks = get_chunks(path)
-    prof_name = path.name.replace('_', '-')
-    upload_to_pinecone(prof_name, chunks)
+    upload_to_pinecone(name, chunks)
 
 
 def prompt_index_deletion_and_quit():
@@ -133,29 +155,43 @@ def prompt_index_deletion_and_quit():
         print('Index saved')
     exit(0)
 
-# def rag_query(professor_name, user_message, k=5) -> str:
-#     primer = f"Your job is to turn the user's question into a query statement for a vector database to answer the user's question about professor {professor_name}."
-#     messages = [{"role": "system", "content": primer}, {"role": "user", "content": user_message}]
-#     return client.chat.completions.create(
-#         model=language_model,
-#         messages=messages
-#     ).
+def rag_query(professor_name, user_message) -> str:
+    with open(papers_path / name_to_pathname(professor_name) / "successful_articles.json", 'r') as file:
+        article_info = json.load(file)
+        titles = [item[0] for item in article_info.values()]
+        print(titles)
+
+   
+    primer = (
+    f"Your task is to generate a search query for a vector database. This query should be designed to retrieve relevant information "
+    f"from research papers authored by Professor {professor_name}. The user's message may contain a question or a topic of interest "
+    f"related to the professor's work. Use the following article titles as a reference to understand the scope of their research: {titles}. "
+    "The query should be concise and focused on retrieving the most relevant information based on the user's input."
+    )
+
+    messages = [{"role": "system", "content": primer}, {"role": "user", "content": user_message}]
+    response = client.chat.completions.create(
+        model=language_model,
+        messages=messages
+    )
+    answer = response.choices[0].message.content
+    return answer
 
 
-def rag_chat(professor_name, messages : list, k = 5) -> str:
+def rag_chat(professor_name, messages : list, k = 5):
     """
     Parameters:
         messages - The chat history (excluding the system prompt). Context retrieved by RAG will not be included in any of these messages.
                     The first and last element should both be user messages.
         k - The number of chunks that are received by the vector database.
-    Returns a new message using RAG.
+    Returns a generator of chunks.
     """
-    index = pc.Index(name_to_index_name(professor_name))
     primer = f"You are a Q&A bot that answers questions specifically about {professor_name}'s research. If the user doesn't specify a professor, you know they are referring to {professor_name}. Avoid naming other professors unless it is relevant to the user's questions. You will be given {k} excerpts from {professor_name}'s research papers, but the user is not providing them and cannot see them. If you don't know anything based on the results, truthfully say \"I don't know\"."
     chat_history = [{"role": "system", "content": primer}] + messages
     user_response = chat_history[-1]["content"]
-    query = client.embeddings.create(input=[user_response], model=embeddings_model).data[0].embedding
-    top_results = index.query(vector=query, top_k=k, include_metadata=True)['matches']
+    chatbot_response = rag_query(professor_name, user_response)
+    query = client.embeddings.create(input=[chatbot_response], model=embeddings_model).data[0].embedding
+    top_results = index.query(vector=query, top_k=k, include_metadata=True, filter={'professor': professor_name})['matches']
 
     metadata = [result['metadata'] for result in top_results]
     info = ['\n\n'.join([f"{key}:{data[key]}" for key in data]) for data in metadata]
@@ -173,61 +209,8 @@ def rag_chat(professor_name, messages : list, k = 5) -> str:
         if content:
             yield content
 
-def chat():
-    print("""Welcome to the chat bot! You can ask a question, or do one of the following
-        FORGET if you want to reset the conversation (saving me money if you are starting a new topic)
-        QUIT if you want to exit the conversation""")
-
-    messages = [{"role": "system", "content": primer}]
-    user_response = input(f"Ask a question about {professor_name}: ")
-    while user_response != "QUIT":
-        if user_response == "FORGET":
-            messages = [{"role": "system", "content": primer}]
-            print("Reset memory")
-        else:
-            query = client.embeddings.create(input=[user_response], model=embeddings_model).data[0].embedding
-            top_results = index.query(vector=query, top_k=5, include_metadata=True)['matches']
-            metadata = [result['metadata'] for result in top_results]
-            info = ['\n'.join([f"{key}:\n{data[key]}" for key in data]) for data in metadata]
-            augmented = '\n\n-----\n\n'.join(info)
-            augmented_prompt = f"{augmented}\n\n\n-----\n\n\n{user_response}"
-
-            messages.append({"role": "user", "content": augmented_prompt})
-            completion = client.chat.completions.create(
-                model=language_model,
-                messages=messages
-            )
-            assistant_response = completion.choices[0].message.content
-            print('\n', assistant_response)
-            messages.append({"role": "assistant", "content": assistant_response})
-            print('\n\n', messages[2])
-
-
-        user_response = input(f"Ask a question about {professor_name}.")
-    prompt_index_deletion_and_quit()
-
-
-    completion = client.chat.completions.create(
-        model=language_model,
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello!"}
-        ]
-    )
-
 if __name__ == "__main__":
-    if index.describe_index_stats()['total_vector_count'] == 0:
-        print('Index not yet created. Creating index.')
-        chunks = get_chunks(dir_path)
-        inp = input(f"Estimated cost: {estimate_embedding_cost(chunks)}. Would you like to continue? y/n: ")
-        if inp == 'n':
-            prompt_index_deletion_and_quit()
-        upload_to_pinecone(professor_name, chunks)
-    else:
-        print('Index already exists!')
-
-    chat()
-
-    prompt_index_deletion_and_quit()
+    top_results = index.query(vector=[0]*1536, top_k=5, include_metadata=True, filter={'professor': "Ritwik Banerjee"})['matches']
+    print(top_results)
 
 
