@@ -41,5 +41,6 @@ Are you interested in learning more about a professor's research but find it ove
 
 ## Future Improvements
 - Improve scraping abilities to gather more articles.
+- Improve error handling.
 - Enhance the chatbot's ability to answer more specific or complex research questions.
 - Implement user authentication for custom saved profiles of professors and favorite papers.
